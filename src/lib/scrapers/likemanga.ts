@@ -186,10 +186,6 @@ export class LikeMangaScraper extends BaseScraper {
           typeof item.date === "string"
             ? item.date
             : "",
-        genres:
-          typeof item.category === "string"
-            ? [item.category]
-            : undefined,
       });
     }
 
