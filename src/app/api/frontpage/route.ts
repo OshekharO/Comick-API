@@ -7,7 +7,7 @@ import {
 
 export const runtime = "edge";
 
-// i'm not entirely sure that this feature is needed, 
+// i'm not entirely sure that this feature is needed,
 // but i'll add it for now due to the request from a user
 // documenting to the best of my ability
 
@@ -18,15 +18,22 @@ export const runtime = "edge";
 export async function GET() {
   try {
     const frontpages = getAllFrontpageInfo();
+
     return NextResponse.json({
       sources: frontpages,
       sourceIds: getFrontpageSourceIds(),
     });
   } catch (error: unknown) {
     console.error("[Frontpage] Error getting frontpage info:", error);
+
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to get frontpage info" },
-      { status: 500 }
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to get frontpage info",
+      },
+      { status: 500 },
     );
   }
 }
@@ -41,59 +48,93 @@ export async function GET() {
  *   section: string;     // Section ID (e.g., "trending", "latest_hot")
  *   page?: number;       // Page number (default: 1)
  *   limit?: number;      // Items per page (default: 30)
- *   days?: number;       // Time filter in days (for trending/most_followed, default: 7)
+ *   days?: number;       // Time filter in days (default: 7)
  * }
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    /**
+     * Read raw body safely
+     */
+    const rawBody = await request.text();
+
+    /**
+     * Empty POST body
+     * -> return available sources
+     */
+    if (!rawBody.trim()) {
+      const frontpages = getAllFrontpageInfo();
+
+      return NextResponse.json({
+        sources: frontpages,
+        sourceIds: getFrontpageSourceIds(),
+      });
+    }
+
+    /**
+     * Parse JSON body
+     */
+    const body = JSON.parse(rawBody);
+
     const { source, section, page, limit, days } = body;
 
     if (!source) {
       return NextResponse.json(
         { error: "Source is required" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     if (!section) {
       return NextResponse.json(
         { error: "Section is required" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     const frontpage = getFrontpage(source);
+
     if (!frontpage) {
       const availableSources = getFrontpageSourceIds();
+
       return NextResponse.json(
         {
           error: `Source "${source}" does not have frontpage support. Available sources: ${availableSources.join(", ")}`,
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    const availableSections = frontpage.getAvailableSections();
-    const sectionConfig = availableSections.find((s) => s.id === section);
+    const availableSections =
+      frontpage.getAvailableSections();
+
+    const sectionConfig = availableSections.find(
+      (s) => s.id === section,
+    );
+
     if (!sectionConfig) {
       return NextResponse.json(
         {
-          error: `Unknown section "${section}". Available sections: ${availableSections.map((s) => s.id).join(", ")}`,
+          error: `Unknown section "${section}". Available sections: ${availableSections
+            .map((s) => s.id)
+            .join(", ")}`,
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     console.log(
-      `[Frontpage] Fetching ${source}/${section} (page: ${page || 1}, limit: ${limit || 30}, days: ${days || 7})`
+      `[Frontpage] Fetching ${source}/${section} (page: ${
+        page || 1
+      }, limit: ${limit || 30}, days: ${days || 7})`,
     );
 
-    const sectionData = await frontpage.fetchSection(section, {
-      page: page || 1,
-      limit: limit || 30,
-      days: days || 7,
-    });
+    const sectionData =
+      await frontpage.fetchSection(section, {
+        page: page || 1,
+        limit: limit || 30,
+        days: days || 7,
+      });
 
     return NextResponse.json({
       source: frontpage.getSourceId(),
@@ -102,10 +143,19 @@ export async function POST(request: NextRequest) {
       fetchedAt: Date.now(),
     });
   } catch (error: unknown) {
-    console.error("[Frontpage] Error fetching section:", error);
+    console.error(
+      "[Frontpage] Error fetching section:",
+      error,
+    );
+
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to fetch frontpage section" },
-      { status: 500 }
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to fetch frontpage section",
+      },
+      { status: 500 },
     );
   }
 }
