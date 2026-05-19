@@ -9,11 +9,11 @@ export class LikeMangaScraper extends BaseScraper {
   }
 
   getBaseUrl(): string {
-    return "https://likemanga.in";
+    return "https://mgread.io";
   }
 
   canHandle(url: string): boolean {
-    return url.includes("likemanga.in");
+    return url.includes("mgread.io");
   }
 
   async extractMangaInfo(url: string): Promise<{ title: string; id: string }> {
@@ -63,7 +63,7 @@ export class LikeMangaScraper extends BaseScraper {
         if (href) {
           const fullUrl = href.startsWith("http")
             ? href
-            : `https://likemanga.in${href}`;
+            : `https://mgread.io${href}`;
           const chapterNumber = this.extractChapterNumber(fullUrl, chapterText);
 
           if (chapterNumber >= 0 && !seenChapterNumbers.has(chapterNumber)) {
@@ -120,7 +120,7 @@ export class LikeMangaScraper extends BaseScraper {
   }
 
   async search(query: string): Promise<SearchResult[]> {
-    const searchUrl = `https://likemanga.in/?s=${encodeURIComponent(query)}&post_type=wp-manga`;
+    const searchUrl = `https://mgread.io/?s=${encodeURIComponent(query)}&post_type=wp-manga`;
     const html = await this.fetchWithRetry(searchUrl);
     const $ = cheerio.load(html);
     const results: SearchResult[] = [];
@@ -160,7 +160,7 @@ export class LikeMangaScraper extends BaseScraper {
         url,
         coverImage: coverImage?.startsWith("http")
           ? coverImage
-          : `https://likemanga.in${coverImage}`,
+          : `https://mgread.io${coverImage}`,
         latestChapter,
         lastUpdated,
         rating,
