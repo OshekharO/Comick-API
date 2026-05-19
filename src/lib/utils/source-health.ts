@@ -8,7 +8,6 @@ export enum SourceStatus {
   ERROR = "error",
 }
 
-const HEALTH_CHECK_TIMEOUT_MS = 15000;
 const CONCURRENT_HEALTH_CHECKS = 5;
 
 export interface SourceHealthResult {
@@ -90,21 +89,11 @@ export async function checkSourceHealth(
   const startedAt = Date.now();
   const lastChecked = new Date().toISOString();
 
-  const controller = new AbortController();
-
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, HEALTH_CHECK_TIMEOUT_MS);
-
   try {
     /**
      * Execute scraper search
      */
-    const results = await scraper.search(testQuery, {
-      signal: controller.signal,
-    } as any);
-
-    clearTimeout(timeout);
+    const results = await scraper.search(testQuery);
 
     const responseTime = Date.now() - startedAt;
 
@@ -158,24 +147,7 @@ export async function checkSourceHealth(
       lastChecked,
     };
   } catch (error: any) {
-    clearTimeout(timeout);
-
     const responseTime = Date.now() - startedAt;
-
-    /**
-     * Timeout / Abort
-     */
-    if (
-      error?.name === "AbortError" ||
-      error?.name === "TimeoutError"
-    ) {
-      return {
-        status: SourceStatus.TIMEOUT,
-        message: "Request timed out",
-        responseTime,
-        lastChecked,
-      };
-    }
 
     const message =
       typeof error?.message === "string"
@@ -183,7 +155,7 @@ export async function checkSourceHealth(
         : "Unknown error";
 
     /**
-     * Direct Cloudflare detection
+     * Cloudflare detection from message
      */
     if (
       message.toLowerCase().includes("cloudflare") ||
