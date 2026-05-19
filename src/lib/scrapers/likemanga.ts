@@ -64,10 +64,12 @@ export class LikeMangaScraper extends BaseScraper {
           const fullUrl = href.startsWith("http")
             ? href
             : `https://mgread.io${href}`;
+
           const chapterNumber = this.extractChapterNumber(fullUrl, chapterText);
 
           if (chapterNumber >= 0 && !seenChapterNumbers.has(chapterNumber)) {
             seenChapterNumbers.add(chapterNumber);
+
             chapters.push({
               id: `${chapterNumber}`,
               number: chapterNumber,
@@ -87,11 +89,13 @@ export class LikeMangaScraper extends BaseScraper {
   protected extractChapterNumber(chapterUrl: string, chapterText?: string): number {
     if (chapterText) {
       const concatenatedMatch = chapterText.match(/Chapter\s+(\d+)\s*[\+\-]\s*(\d+)/i);
+
       if (concatenatedMatch) {
         return -1;
       }
 
       const textMatch = chapterText.match(/Chapter\s+(\d+(?:\.\d+)?)/i);
+
       if (textMatch) {
         return parseFloat(textMatch[1]);
       }
@@ -104,14 +108,17 @@ export class LikeMangaScraper extends BaseScraper {
 
     for (const pattern of patterns) {
       const match = chapterUrl.match(pattern);
+
       if (match) {
         const mainNumber = parseInt(match[1], 10);
         const decimalPart = match[2] ? match[2] : null;
 
         if (decimalPart) {
           const divisor = Math.pow(10, decimalPart.length);
+
           return mainNumber + parseInt(decimalPart, 10) / divisor;
         }
+
         return mainNumber;
       }
     }
@@ -120,52 +127,66 @@ export class LikeMangaScraper extends BaseScraper {
   }
 
   async search(query: string): Promise<SearchResult[]> {
-    const searchUrl = `https://mgread.io/?s=${encodeURIComponent(query)}&post_type=wp-manga`;
-    const html = await this.fetchWithRetry(searchUrl);
-    const $ = cheerio.load(html);
+    const searchUrl = `https://mgread.io/wp-json/initlise/v1/search?term=${encodeURIComponent(query)}`;
+
+    const response = await fetch(searchUrl, {
+      method: "GET",
+      headers: {
+        "User-Agent": this.config.userAgent,
+        Accept: "application/json",
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: "https://mgread.io/",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    if (!Array.isArray(data)) {
+      return [];
+    }
+
     const results: SearchResult[] = [];
 
-    $(".c-tabs-item__content").each((_, element) => {
-      const $item = $(element);
+    for (const item of data) {
+      const url =
+        typeof item.url === "string"
+          ? item.url
+          : "";
 
-      const titleLink = $item.find(".post-title a").first();
-      const url = titleLink.attr("href");
-      const title = titleLink.text().trim();
+      if (!url) continue;
 
-      if (!url) return;
+      const idMatch = url.match(/\/manga\/([^/]+)/);
 
-      const slugMatch = url.match(/\/manga\/([^/]+)/);
-      const id = slugMatch ? slugMatch[1] : "";
+      const id = idMatch ? idMatch[1] : "";
 
-      const coverImg = $item.find(".tab-thumb img").first();
-      const coverImage = coverImg.attr("src") || coverImg.attr("data-src");
-
-      const latestChapterLink = $item.find(".latest-chap a").first();
-      const latestChapterText = latestChapterLink.text().trim();
-      const chapterMatch = latestChapterText.match(/Chapter\s+([\d.]+)/i);
-      const latestChapter = chapterMatch ? parseFloat(chapterMatch[1]) : 0;
-
-      const lastUpdatedSpan = $item.find(".post-on span, .post-on").first();
-      const lastUpdated = lastUpdatedSpan.text().trim();
-
-      const ratingSpan = $item.find(".total_votes").first();
-      const rating =
-        ratingSpan.length > 0
-          ? parseFloat(ratingSpan.text().trim())
-          : undefined;
+      const title =
+        typeof item.title === "string"
+          ? item.title.replace(/<[^>]+>/g, "").trim()
+          : "";
 
       results.push({
         id,
         title,
         url,
-        coverImage: coverImage?.startsWith("http")
-          ? coverImage
-          : `https://mgread.io${coverImage}`,
-        latestChapter,
-        lastUpdated,
-        rating,
+        coverImage:
+          typeof item.thumb === "string"
+            ? item.thumb
+            : undefined,
+        latestChapter: 0,
+        lastUpdated:
+          typeof item.date === "string"
+            ? item.date
+            : "",
+        genres:
+          typeof item.category === "string"
+            ? [item.category]
+            : undefined,
       });
-    });
+    }
 
     return results;
   }
