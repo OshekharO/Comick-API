@@ -164,9 +164,14 @@ export class LikeMangaScraper extends BaseScraper {
       const id = idMatch ? idMatch[1] : "";
 
       const title =
-        typeof item.title === "string"
-          ? item.title.replace(/<[^>]+>/g, "").trim()
-          : "";
+         typeof item.title === "string"
+          ? item.title
+            .replace(/<[^>]+>/g, "")
+            .replace(/&#8217;/g, "'")
+            .replace(/&amp;/g, "&")
+            .replace(/&quot;/g, '"')
+            .replace(/&#039;/g, "'")
+            .trim(): "";
 
       results.push({
         id,
