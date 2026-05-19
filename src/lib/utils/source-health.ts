@@ -111,7 +111,6 @@ export async function checkSourceHealth(
 
     /**
      * Empty arrays are suspicious
-     * for large manga/comic sources
      */
     if (results.length === 0) {
       return {
@@ -146,11 +145,11 @@ export async function checkSourceHealth(
       responseTime,
       lastChecked,
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     const responseTime = Date.now() - startedAt;
 
     const message =
-      typeof error?.message === "string"
+      error instanceof Error
         ? error.message
         : "Unknown error";
 
@@ -173,30 +172,45 @@ export async function checkSourceHealth(
     /**
      * Axios / Fetch response detection
      */
-    if (error?.response) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "response" in error
+    ) {
       try {
-        const status = error.response.status;
+        const response = (
+          error as {
+            response: {
+              status?: number;
+              headers?: Headers;
+              text?: () => Promise<string>;
+              data?: unknown;
+            };
+          }
+        ).response;
+
+        const status = response.status;
 
         let html = "";
 
         /**
          * Fetch API style
          */
-        if (typeof error.response.text === "function") {
-          html = await error.response.text();
+        if (typeof response.text === "function") {
+          html = await response.text();
         }
 
         /**
          * Axios style
          */
-        else if (typeof error.response.data === "string") {
-          html = error.response.data;
+        else if (typeof response.data === "string") {
+          html = response.data;
         }
 
         if (
           detectCloudflare(
             html,
-            error.response.headers,
+            response.headers,
             status,
           )
         ) {
@@ -233,10 +247,6 @@ export async function checkAllSourcesHealth(
 
   /**
    * Limit concurrency
-   * Prevents:
-   * - Cloudflare suspicion
-   * - rate limiting
-   * - socket exhaustion
    */
   const limit = pLimit(CONCURRENT_HEALTH_CHECKS);
 
@@ -251,11 +261,11 @@ export async function checkAllSourcesHealth(
         const health = await checkSourceHealth(scraper);
 
         results.set(sourceName, health);
-      } catch (error: any) {
+      } catch (error: unknown) {
         results.set(sourceName, {
           status: SourceStatus.ERROR,
           message:
-            typeof error?.message === "string"
+            error instanceof Error
               ? error.message
               : "Unknown health check failure",
           lastChecked: new Date().toISOString(),
