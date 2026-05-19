@@ -1,4 +1,5 @@
 import { BaseScraper } from "@/lib/scrapers/base";
+import pLimit from "p-limit";
 
 export enum SourceStatus {
   HEALTHY = "healthy",
@@ -8,6 +9,7 @@ export enum SourceStatus {
 }
 
 const HEALTH_CHECK_TIMEOUT_MS = 15000;
+const CONCURRENT_HEALTH_CHECKS = 5;
 
 export interface SourceHealthResult {
   status: SourceStatus;
@@ -17,37 +19,61 @@ export interface SourceHealthResult {
 }
 
 /**
- * Detects if a response is blocked by Cloudflare
+ * Detect Cloudflare protection pages
  */
-export function detectCloudflare(html: string, headers?: Headers): boolean {
-  // Check for common Cloudflare patterns
+export function detectCloudflare(
+  html: string,
+  headers?: Headers,
+  status?: number,
+): boolean {
+  if (!html) return false;
+
+  const lowerHtml = html.toLowerCase();
+
   const cloudflarePatterns = [
-    /cloudflare/i,
-    /cf-ray/i,
-    /checking your browser/i,
-    /enable javascript and cookies/i,
-    /ddos protection by cloudflare/i,
-    /attention required.*cloudflare/i,
-    /challenge-platform/i,
-    /cf-chl-bypass/i,
+    "cloudflare",
+    "cf-ray",
+    "checking your browser",
+    "enable javascript and cookies",
+    "ddos protection by cloudflare",
+    "attention required",
+    "challenge-platform",
+    "cf-chl",
+    "/cdn-cgi/",
+    "just a moment...",
+    "verify you are human",
+    "captcha",
   ];
 
-  // Check HTML content
-  for (const pattern of cloudflarePatterns) {
-    if (pattern.test(html)) {
-      return true;
-    }
+  /**
+   * Check HTML body
+   */
+  if (cloudflarePatterns.some((pattern) => lowerHtml.includes(pattern))) {
+    return true;
   }
 
-  // Check headers if available
+  /**
+   * Check suspicious HTTP status
+   */
+  if (
+    (status === 403 || status === 429 || status === 503) &&
+    lowerHtml.includes("cloudflare")
+  ) {
+    return true;
+  }
+
+  /**
+   * Check response headers
+   */
   if (headers) {
-    const serverHeader = headers.get("server");
+    const server = headers.get("server")?.toLowerCase();
     const cfRay = headers.get("cf-ray");
 
-    if (serverHeader?.toLowerCase().includes("cloudflare") || cfRay) {
-      // Having Cloudflare headers doesn't mean it's blocking
-      // Only return true if we also see blocking patterns in HTML
-      return cloudflarePatterns.some((pattern) => pattern.test(html));
+    if (
+      (server?.includes("cloudflare") || cfRay) &&
+      lowerHtml.includes("challenge")
+    ) {
+      return true;
     }
   }
 
@@ -55,72 +81,93 @@ export function detectCloudflare(html: string, headers?: Headers): boolean {
 }
 
 /**
- * Test if a source is healthy by attempting a search
+ * Check individual source health
  */
 export async function checkSourceHealth(
   scraper: BaseScraper,
-  testQuery: string = "test",
+  testQuery = "one piece",
 ): Promise<SourceHealthResult> {
-  const startTime = Date.now();
+  const startedAt = Date.now();
   const lastChecked = new Date().toISOString();
 
-  const timeoutPromise = new Promise<{ timedOut: true }>((resolve) => {
-    setTimeout(() => resolve({ timedOut: true }), HEALTH_CHECK_TIMEOUT_MS);
-  });
+  const controller = new AbortController();
 
-  const searchPromise = scraper.search(testQuery).then((results) => ({
-    timedOut: false as const,
-    results,
-  }));
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, HEALTH_CHECK_TIMEOUT_MS);
 
   try {
-    const result = await Promise.race([searchPromise, timeoutPromise]);
-    const responseTime = Date.now() - startTime;
+    /**
+     * Execute scraper search
+     */
+    const results = await scraper.search(testQuery, {
+      signal: controller.signal,
+    } as any);
 
-    if (result.timedOut) {
+    clearTimeout(timeout);
+
+    const responseTime = Date.now() - startedAt;
+
+    /**
+     * Invalid result type
+     */
+    if (!Array.isArray(results)) {
       return {
-        status: SourceStatus.TIMEOUT,
-        message: `Source took longer than ${HEALTH_CHECK_TIMEOUT_MS / 1000}s to respond`,
+        status: SourceStatus.ERROR,
+        message: "Invalid scraper response",
         responseTime,
         lastChecked,
       };
     }
 
-    if (Array.isArray(result.results)) {
+    /**
+     * Empty arrays are suspicious
+     * for large manga/comic sources
+     */
+    if (results.length === 0) {
       return {
-        status: SourceStatus.HEALTHY,
-        message: "Source is operational",
+        status: SourceStatus.CLOUDFLARE,
+        message: "Possible Cloudflare block or empty result",
+        responseTime,
+        lastChecked,
+      };
+    }
+
+    /**
+     * Validate result structure
+     */
+    const first = results[0];
+
+    if (
+      !first ||
+      typeof first !== "object" ||
+      !("title" in first)
+    ) {
+      return {
+        status: SourceStatus.ERROR,
+        message: "Malformed search results",
         responseTime,
         lastChecked,
       };
     }
 
     return {
-      status: SourceStatus.ERROR,
-      message: "Unexpected response format",
+      status: SourceStatus.HEALTHY,
+      message: `Operational (${results.length} results)`,
       responseTime,
       lastChecked,
     };
-  } catch (error: unknown) {
-    const responseTime = Date.now() - startTime;
+  } catch (error: any) {
+    clearTimeout(timeout);
 
-    // Type guard to check if error is an Error-like object
-    const isErrorWithMessage = (
-      err: unknown,
-    ): err is { message: string; name?: string } => {
-      return typeof err === "object" && err !== null && "message" in err;
-    };
+    const responseTime = Date.now() - startedAt;
 
-    const isErrorWithResponse = (
-      err: unknown,
-    ): err is { response: { text: () => Promise<string> } } => {
-      return typeof err === "object" && err !== null && "response" in err;
-    };
-
-    // Check if it's a timeout
+    /**
+     * Timeout / Abort
+     */
     if (
-      isErrorWithMessage(error) &&
-      (error.name === "TimeoutError" || error.message?.includes("timeout"))
+      error?.name === "AbortError" ||
+      error?.name === "TimeoutError"
     ) {
       return {
         status: SourceStatus.TIMEOUT,
@@ -130,12 +177,18 @@ export async function checkSourceHealth(
       };
     }
 
-    // Check if error message contains Cloudflare indicators
-    const errorMessage = isErrorWithMessage(error) ? error.message : "";
+    const message =
+      typeof error?.message === "string"
+        ? error.message
+        : "Unknown error";
+
+    /**
+     * Direct Cloudflare detection
+     */
     if (
-      errorMessage.toLowerCase().includes("cloudflare") ||
-      errorMessage.includes("cf-ray") ||
-      errorMessage.toLowerCase().includes("challenge")
+      message.toLowerCase().includes("cloudflare") ||
+      message.toLowerCase().includes("cf-ray") ||
+      message.toLowerCase().includes("challenge")
     ) {
       return {
         status: SourceStatus.CLOUDFLARE,
@@ -145,22 +198,53 @@ export async function checkSourceHealth(
       };
     }
 
-    // Try to detect Cloudflare from response if available
-    if (isErrorWithResponse(error)) {
-      const html = await error.response.text().catch(() => "");
-      if (detectCloudflare(html)) {
-        return {
-          status: SourceStatus.CLOUDFLARE,
-          message: "Cloudflare protection detected",
-          responseTime,
-          lastChecked,
-        };
+    /**
+     * Axios / Fetch response detection
+     */
+    if (error?.response) {
+      try {
+        const status = error.response.status;
+
+        let html = "";
+
+        /**
+         * Fetch API style
+         */
+        if (typeof error.response.text === "function") {
+          html = await error.response.text();
+        }
+
+        /**
+         * Axios style
+         */
+        else if (typeof error.response.data === "string") {
+          html = error.response.data;
+        }
+
+        if (
+          detectCloudflare(
+            html,
+            error.response.headers,
+            status,
+          )
+        ) {
+          return {
+            status: SourceStatus.CLOUDFLARE,
+            message: "Cloudflare challenge page detected",
+            responseTime,
+            lastChecked,
+          };
+        }
+      } catch {
+        /**
+         * Ignore parsing failures
+         */
       }
     }
 
     return {
       status: SourceStatus.ERROR,
-      message: isErrorWithMessage(error) ? error.message : "Unknown error",
+      message,
       responseTime,
       lastChecked,
     };
@@ -168,20 +252,50 @@ export async function checkSourceHealth(
 }
 
 /**
- * Check health of all sources
+ * Check health of all scrapers
  */
 export async function checkAllSourcesHealth(
   scrapers: BaseScraper[],
 ): Promise<Map<string, SourceHealthResult>> {
   const results = new Map<string, SourceHealthResult>();
 
-  await Promise.all(
-    scrapers.map(async (scraper) => {
-      const sourceName = scraper.getName().toLowerCase().replace(/\s+/g, "-");
-      const health = await checkSourceHealth(scraper);
-      results.set(sourceName, health);
+  /**
+   * Limit concurrency
+   * Prevents:
+   * - Cloudflare suspicion
+   * - rate limiting
+   * - socket exhaustion
+   */
+  const limit = pLimit(CONCURRENT_HEALTH_CHECKS);
+
+  const checks = scrapers.map((scraper) =>
+    limit(async () => {
+      const sourceName = scraper
+        .getName()
+        .toLowerCase()
+        .replace(/\s+/g, "-");
+
+      try {
+        const health = await checkSourceHealth(scraper);
+
+        results.set(sourceName, health);
+      } catch (error: any) {
+        results.set(sourceName, {
+          status: SourceStatus.ERROR,
+          message:
+            typeof error?.message === "string"
+              ? error.message
+              : "Unknown health check failure",
+          lastChecked: new Date().toISOString(),
+        });
+      }
     }),
   );
+
+  /**
+   * Never fail entire batch
+   */
+  await Promise.allSettled(checks);
 
   return results;
 }
