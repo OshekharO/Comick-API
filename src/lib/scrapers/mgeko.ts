@@ -33,28 +33,45 @@ export class MgekoScraper extends BaseScraper {
 
   async getChapterList(mangaUrl: string): Promise<ScrapedChapter[]> {
     let chaptersUrl = mangaUrl;
+
     if (!mangaUrl.includes("/all-chapters")) {
       chaptersUrl = mangaUrl.replace(/\/$/, "") + "/all-chapters";
     }
 
     const html = await this.fetchWithRetry(chaptersUrl);
+
     const $ = cheerio.load(html);
+
     const chapters: ScrapedChapter[] = [];
+
     const seenChapterNumbers = new Set<number>();
 
     $("ul.chapter-list li a").each((_: number, element: any) => {
       const $link = $(element);
+
       const href = $link.attr("href");
 
       if (href) {
         const fullUrl = href.startsWith("http")
           ? href
           : `https://www.mgeko.cc${href}`;
-        const chapterTitle = $link.find("strong.chapter-title").text().trim();
-        const chapterNumber = this.extractChapterNumber(fullUrl, chapterTitle);
 
-        if (chapterNumber >= 0 && !seenChapterNumbers.has(chapterNumber)) {
+        const chapterTitle = $link
+          .find("strong.chapter-title")
+          .text()
+          .trim();
+
+        const chapterNumber = this.extractChapterNumber(
+          fullUrl,
+          chapterTitle,
+        );
+
+        if (
+          chapterNumber >= 0 &&
+          !seenChapterNumbers.has(chapterNumber)
+        ) {
           seenChapterNumbers.add(chapterNumber);
+
           chapters.push({
             id: `${chapterNumber}`,
             number: chapterNumber,
@@ -68,14 +85,23 @@ export class MgekoScraper extends BaseScraper {
     return chapters.sort((a, b) => a.number - b.number);
   }
 
-  protected extractChapterNumber(chapterUrl: string, chapterText?: string): number {
+  protected extractChapterNumber(
+    chapterUrl: string,
+    chapterText?: string,
+  ): number {
     if (chapterText) {
-      const concatenatedMatch = chapterText.match(/Chapter\s+(\d+)\s*[\+\-]\s*(\d+)/i);
+      const concatenatedMatch = chapterText.match(
+        /Chapter\s+(\d+)\s*[\+\-]\s*(\d+)/i,
+      );
+
       if (concatenatedMatch) {
         return -1;
       }
 
-      const textMatch = chapterText.match(/Chapter\s+(\d+(?:\.\d+)?)/i);
+      const textMatch = chapterText.match(
+        /Chapter\s+(\d+(?:\.\d+)?)/i,
+      );
+
       if (textMatch) {
         return parseFloat(textMatch[1]);
       }
@@ -89,14 +115,21 @@ export class MgekoScraper extends BaseScraper {
 
     for (const pattern of patterns) {
       const match = chapterUrl.match(pattern);
+
       if (match) {
         const mainNumber = parseInt(match[1], 10);
+
         const decimalPart = match[2] ? match[2] : null;
 
         if (decimalPart) {
           const divisor = Math.pow(10, decimalPart.length);
-          return mainNumber + parseInt(decimalPart, 10) / divisor;
+
+          return (
+            mainNumber +
+            parseInt(decimalPart, 10) / divisor
+          );
         }
+
         return mainNumber;
       }
     }
@@ -105,15 +138,20 @@ export class MgekoScraper extends BaseScraper {
   }
 
   async search(query: string): Promise<SearchResult[]> {
-    const searchUrl = `https://www.mgeko.cc/search/?search=${encodeURIComponent(query)}`;
+    const searchUrl =
+      `https://www.mgeko.cc/autocomplete?term=${encodeURIComponent(query)}`;
+
     const html = await this.fetchWithRetry(searchUrl);
+
     const $ = cheerio.load(html);
+
     const results: SearchResult[] = [];
 
     $("ul.novel-list li.novel-item").each((_, element) => {
       const $item = $(element);
 
       const link = $item.find('a[href*="/manga/"]').first();
+
       const url = link.attr("href");
 
       if (!url) return;
@@ -122,19 +160,29 @@ export class MgekoScraper extends BaseScraper {
         ? url
         : `https://www.mgeko.cc${url}`;
 
-      const title = $item.find("h4.novel-title").text().trim();
+      const title = $item
+        .find("h4.novel-title")
+        .text()
+        .replace(/\s+/g, " ")
+        .trim();
 
       const idMatch = url.match(/\/manga\/([^\/]+)/);
+
       const id = idMatch ? idMatch[1] : "";
 
       const coverImg = $item.find("img").first();
-      let coverImage = coverImg.attr("src");
 
-      if (!coverImage || coverImage.includes("loading.gif")) {
-        coverImage =
-          coverImg.attr("data-src") ||
-          coverImg.attr("data-lazy-src") ||
-          coverImg.attr("data-original");
+      let coverImage =
+        coverImg.attr("src") ||
+        coverImg.attr("data-src") ||
+        coverImg.attr("data-lazy-src") ||
+        coverImg.attr("data-original");
+
+      if (
+        coverImage &&
+        !coverImage.startsWith("http")
+      ) {
+        coverImage = `https://www.mgeko.cc${coverImage}`;
       }
 
       const latestChapterText = $item
@@ -143,30 +191,28 @@ export class MgekoScraper extends BaseScraper {
         .trim();
 
       let latestChapter = 0;
-      const chapterMatch = latestChapterText.match(/Chapters?\s+(\d+)/i);
+
+      const chapterMatch =
+        latestChapterText.match(/Ch\.(\d+)/i);
+
       if (chapterMatch) {
-        latestChapter = parseInt(chapterMatch[1], 10);
+        latestChapter = parseInt(
+          chapterMatch[1],
+          10,
+        );
       }
 
-      const lastUpdatedElement = $item.find("div.novel-stats span");
-      const lastUpdated = lastUpdatedElement.last().text().trim();
+      const spans = $item
+        .find("div.novel-stats span");
 
-      let coverImageUrl = coverImage;
-      if (coverImage) {
-        if (coverImage.startsWith("http")) {
-          coverImageUrl = coverImage;
-        } else if (coverImage.startsWith("/")) {
-          coverImageUrl = `https://imgsrv4.com/avatar/288x412${coverImage}`;
-        } else {
-          coverImageUrl = `https://imgsrv4.com/avatar/288x412/${coverImage}`;
-        }
-      }
+      const lastUpdated =
+        spans.first().text().trim();
 
       results.push({
         id,
         title,
         url: fullUrl,
-        coverImage: coverImageUrl,
+        coverImage,
         latestChapter,
         lastUpdated,
       });
