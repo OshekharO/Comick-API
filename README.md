@@ -229,7 +229,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on adding sources.
 
 ## Deployment
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/GooglyBlox/comick-source-api)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/OshekharO/Comick-API)
 
 ```bash
 docker build -t comick-source-api .
